@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="italic-detector",
-    version="0.1.0",
+    version="0.2.0",
     packages=find_packages(),
     install_requires=[
         "numpy>=1.20.0",
@@ -16,10 +16,12 @@ setup(
         "onnxruntime>=1.8.0",
         "click>=8.0.0",
         "tqdm>=4.62.0",
+        "matplotlib>=3.5.0",
     ],
     entry_points={
         "console_scripts": [
             "italic-detector=src.main:main",
+            "char-detector=src.character_main:main",
         ],
     },
 )
