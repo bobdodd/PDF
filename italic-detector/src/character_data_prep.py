@@ -113,12 +113,13 @@ class CharacterDataPreparation:
         
         return character_features, word_features
     
-    def create_dataset(self, test_size: float = 0.2, save_chars: bool = False) -> Dict[str, Dict[str, pd.DataFrame]]:
+    def create_dataset(self, test_size: float = 0.2, save_chars: bool = False, augment: bool = False) -> Dict[str, Dict[str, pd.DataFrame]]:
         """Create character and word datasets for training and testing.
         
         Args:
             test_size: Proportion of data to use for testing
             save_chars: Whether to save individual character images
+            augment: Whether to apply data augmentation
             
         Returns:
             Dictionary with datasets:
@@ -134,6 +135,49 @@ class CharacterDataPreparation:
             raise ValueError(f"No regular images found in {self.regular_dir}")
             
         print(f"Found {len(italic_paths)} italic images and {len(regular_paths)} regular images")
+        
+        # Apply data augmentation if requested
+        if augment:
+            print("Applying data augmentation...")
+            augmented_italic_paths = []
+            augmented_regular_paths = []
+            
+            for img_path in italic_paths[:20]:  # Limit to avoid explosion
+                try:
+                    img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+                    if img is not None:
+                        augmented_imgs = self.word_data_prep.augment_image(img)
+                        
+                        # Save augmented images
+                        for i, aug_img in enumerate(augmented_imgs):
+                            base_name = os.path.basename(img_path)
+                            name, ext = os.path.splitext(base_name)
+                            aug_path = os.path.join(self.italic_dir, f"{name}_aug_{i}{ext}")
+                            cv2.imwrite(aug_path, aug_img)
+                            augmented_italic_paths.append(aug_path)
+                except Exception as e:
+                    print(f"Error augmenting {img_path}: {e}")
+            
+            for img_path in regular_paths[:20]:  # Limit to avoid explosion
+                try:
+                    img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+                    if img is not None:
+                        augmented_imgs = self.word_data_prep.augment_image(img)
+                        
+                        # Save augmented images
+                        for i, aug_img in enumerate(augmented_imgs):
+                            base_name = os.path.basename(img_path)
+                            name, ext = os.path.splitext(base_name)
+                            aug_path = os.path.join(self.regular_dir, f"{name}_aug_{i}{ext}")
+                            cv2.imwrite(aug_path, aug_img)
+                            augmented_regular_paths.append(aug_path)
+                except Exception as e:
+                    print(f"Error augmenting {img_path}: {e}")
+            
+            # Add augmented paths
+            italic_paths.extend(augmented_italic_paths)
+            regular_paths.extend(augmented_regular_paths)
+            print(f"After augmentation: {len(italic_paths)} italic images and {len(regular_paths)} regular images")
         
         # Process italic images
         print("Segmenting and extracting features from italic images...")

@@ -14,11 +14,13 @@ try:
     from .character_feature_extractor import CharacterFeatureExtractor
     from .character_data_prep import CharacterDataPreparation
     from .character_model import CharacterModel
+    from .ollama_integration import OllamaIntegration
 except ImportError:
     from character_segmentation import CharacterSegmentation
     from character_feature_extractor import CharacterFeatureExtractor
     from character_data_prep import CharacterDataPreparation
     from character_model import CharacterModel
+    from ollama_integration import OllamaIntegration
 
 @click.group()
 def cli():
@@ -30,14 +32,19 @@ def cli():
               help='Proportion of data for testing')
 @click.option('--save-chars', is_flag=True, 
               help='Save individual character images')
-def prepare_character_data(test_size, save_chars):
+@click.option('--augment', is_flag=True,
+              help='Apply data augmentation to increase dataset size')
+def prepare_character_data(test_size, save_chars, augment):
     """Prepare character-level dataset for training."""
     data_prep = CharacterDataPreparation()
     
     if save_chars:
         click.echo("Character image saving enabled - character images will be saved to disk")
     
-    dataset = data_prep.create_dataset(test_size=test_size, save_chars=save_chars)
+    if augment:
+        click.echo("Data augmentation enabled - will generate additional training samples")
+    
+    dataset = data_prep.create_dataset(test_size=test_size, save_chars=save_chars, augment=augment)
     
     click.echo(f"Character dataset prepared with {len(dataset['character']['train'])} training samples "
              f"and {len(dataset['character']['test'])} test samples")
@@ -108,6 +115,35 @@ def train_character_model():
         click.echo(f"Character model exported to ONNX format: {char_onnx_file}")
     if word_onnx_file:
         click.echo(f"Word model exported to ONNX format: {word_onnx_file}")
+        
+@cli.command()
+@click.option('--model-name', default='char-italic-detector', help='Name for the Ollama model')
+@click.option('--base-model', default='llama2', help='Base LLM to use')
+@click.option('--onnx-model', type=click.Path(exists=True), default=None, help='Path to ONNX model file')
+def deploy_to_ollama(model_name, base_model, onnx_model):
+    """Deploy the character-level model to Ollama."""
+    if onnx_model is None:
+        onnx_model = "models/saved/character_level/character_model.onnx"
+        if not os.path.exists(onnx_model):
+            click.echo("ONNX model not found. Train the character model first.")
+            return
+    
+    click.echo(f"Deploying model {onnx_model} to Ollama as {model_name}...")
+    
+    # Create Ollama integration
+    ollama = OllamaIntegration(
+        model_name=model_name,
+        base_model=base_model,
+        onnx_model_path=onnx_model
+    )
+    
+    # Build the model
+    success = ollama.build_model()
+    
+    if success:
+        click.echo(f"Model successfully deployed to Ollama as {model_name}")
+    else:
+        click.echo("Model deployment failed.")
 
 @cli.command()
 @click.argument('image_path_arg', required=False)
@@ -115,9 +151,11 @@ def train_character_model():
               help='Path to text image to analyze')
 @click.option('--visualize', is_flag=True, 
               help='Show character segmentation visualization')
-@click.option('--char-threshold', type=float, default=0.60,
+@click.option('--char-threshold', type=float, default=0.75,  # Increased threshold
               help='Confidence threshold for character-level classification')
-def detect_italic_chars(image_path_arg, image_path, visualize, char_threshold):
+@click.option('--prefer-word', is_flag=True, default=True,  # Added preference for word-level model
+              help='Give preference to word-level model')
+def detect_italic_chars(image_path_arg, image_path, visualize, char_threshold, prefer_word):
     """Detect italic text at character level.
     
     Can be called in two ways:
@@ -174,16 +212,36 @@ def detect_italic_chars(image_path_arg, image_path, visualize, char_threshold):
     # Make predictions
     X_char = np.vstack(char_features)
     
+    word_level_result = False
+    word_probas = [0, 0]
+    
+    # Also use word-level model if available
+    if model.word_level_model:
+        # Extract word features
+        word_features = feature_extractor.extract_word_features(image)
+        word_probas = model.word_level_model.predict_proba(word_features.reshape(1, -1))[0]
+        word_level_result = word_probas[1] >= 0.6
+        
+        click.echo(f"Word-level model confidence: {word_probas[1]:.2f}")
+        click.echo(f"Word-level classification: {'ITALIC' if word_level_result else 'REGULAR'}")
+    
     if model.character_model:
         char_probas = model.character_model.predict_proba(X_char)
         char_predictions = []
         
         for i, proba in enumerate(char_probas):
-            is_italic = proba[1] >= char_threshold
+            # Adjust confidence based on word-level model if prefer_word is enabled
+            if prefer_word and model.word_level_model:
+                adjusted_confidence = 0.7 * proba[1] + 0.3 * word_probas[1] if word_level_result else 0.7 * proba[1]
+            else:
+                adjusted_confidence = proba[1]
+                
+            is_italic = adjusted_confidence >= char_threshold
             char_predictions.append({
                 'position': i,
                 'is_italic': bool(is_italic),
-                'confidence': float(proba[1])
+                'raw_confidence': float(proba[1]),
+                'adjusted_confidence': float(adjusted_confidence)
             })
         
         # Count italic characters
@@ -192,18 +250,28 @@ def detect_italic_chars(image_path_arg, image_path, visualize, char_threshold):
         click.echo(f"Result: {italic_count} of {len(characters)} characters are italic")
         click.echo(f"Character-level italic percentage: {italic_count / len(characters) * 100:.1f}%")
         
-        # Determine overall word status - if over 50% of characters are italic, the word is italic
-        word_is_italic = italic_count / len(characters) >= 0.5
-        click.echo(f"Overall word classification: {'ITALIC' if word_is_italic else 'REGULAR'}")
+        # Determine overall word status
+        char_level_result = italic_count / len(characters) >= 0.5
         
-        # Also use word-level model if available
-        if model.word_level_model:
-            # Extract word features
-            word_features = feature_extractor.extract_word_features(image)
-            word_probas = model.word_level_model.predict_proba(word_features.reshape(1, -1))[0]
+        # Final classification with preference to word-level model
+        if prefer_word and model.word_level_model:
+            # Higher threshold for character to override word level
+            if char_level_result and not word_level_result and italic_count / len(characters) >= 0.7:
+                final_result = True
+            elif not char_level_result and word_level_result and word_probas[1] >= 0.75:
+                final_result = True
+            elif char_level_result != word_level_result:
+                # When they disagree, prefer the character-level result
+                # Character-level is more precise for most cases
+                click.echo("Character and word models disagree - using character-level result")
+                final_result = char_level_result
+            else:
+                final_result = word_level_result
+        else:
+            final_result = char_level_result
             
-            click.echo(f"Word-level model confidence: {word_probas[1]:.2f}")
-            click.echo(f"Word-level classification: {'ITALIC' if word_probas[1] >= 0.6 else 'REGULAR'}")
+        click.echo(f"Character-level classification: {'ITALIC' if char_level_result else 'REGULAR'}")
+        click.echo(f"Overall classification: {'ITALIC' if final_result else 'REGULAR'}")
     
     # Show visualization if requested
     if visualize:
@@ -225,7 +293,7 @@ def detect_italic_chars(image_path_arg, image_path, visualize, char_threshold):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
             
             # Draw confidence
-            conf_str = f"{char_predictions[i]['confidence']:.2f}"
+            conf_str = f"{char_predictions[i]['adjusted_confidence']:.2f}"
             cv2.putText(vis_image, conf_str, (x, y - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1)
         
