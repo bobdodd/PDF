@@ -272,7 +272,7 @@ def analyze_image(
             char_probas = local_model.character_model.predict_proba(X_char)
             
             for i, proba in enumerate(char_probas):
-                is_italic = proba[1] >= 0.75  # Higher threshold for better precision
+                is_italic = proba[1] >= 0.65  # Lower threshold to improve recall for italic characters
                 results.append({
                     "character_index": i,
                     "is_italic": bool(is_italic),
@@ -328,27 +328,33 @@ def analyze_image(
                 word_result["confidence"] = max(word_result.get("confidence", 0.5), 0.6)
                 word_result["note"] = "Overridden by character-level detection (strong italic evidence)"
         
-        # Case 2: Word-level model has very high confidence for italic (>0.8)
-        # Trust the word-level model when it's very confident about italic
-        elif word_result.get("confidence", 0) > 0.8 and word_result.get("is_italic", False):
-            # Just ensure the is_italic flag is set to True
+        # Case 2: Word-level model has very high confidence but consider character evidence
+        # Trust the word-level model only when it's very confident AND there's at least some character evidence
+        elif word_result.get("confidence", 0) > 0.8 and word_result.get("is_italic", False) and italic_percentage > 10:
+            # Only trust high-confidence word model if at least some characters appear italic
             word_result["is_italic"] = True
             word_result["note"] = "Using high-confidence word-level prediction"
+        # Case 2b: Word-level thinks it's italic with high confidence but NO characters detected as italic
+        elif word_result.get("confidence", 0) > 0.8 and word_result.get("is_italic", False) and italic_percentage <= 10:
+            # Override the word model when no character evidence supports it
+            word_result["is_italic"] = False
+            word_result["confidence"] = 0.7
+            word_result["note"] = "Overridden due to no character-level evidence supporting italic"
             
-        # Case 3: Strong character evidence for regular text (<=40% italic)
+        # Case 3: Strong character evidence for regular text (<=30% italic)
         # Only apply if word-level model is not highly confident about italic
-        elif italic_percentage <= 40 and word_result.get("confidence", 0) <= 0.8:
+        elif italic_percentage <= 30 and word_result.get("confidence", 0) <= 0.8:
             # Override word-level result when character detection strongly suggests regular
             if word_result.get("is_italic", False):
                 word_result["is_italic"] = False
                 word_result["confidence"] = max(1.0 - word_result.get("confidence", 0.5), 0.6)
                 word_result["note"] = "Overridden by character-level detection (strong regular evidence)"
         
-        # Case 4: Moderate italic evidence (>50% italic) with low word-level confidence
-        elif italic_percentage > 50 and word_result.get("confidence", 0.5) < 0.5:
-            # Override if word level has low confidence
+        # Case 4: Moderate italic evidence (>50% italic) with low to medium word-level confidence
+        elif italic_percentage > 50 and word_result.get("confidence", 0.5) < 0.6:
+            # Override if word level doesn't have high confidence
             word_result["is_italic"] = True
-            word_result["confidence"] = max(word_result.get("confidence", 0), 0.55)
+            word_result["confidence"] = max(word_result.get("confidence", 0), 0.60)
             word_result["note"] = "Overridden by character-level detection (majority of characters italic)"
         
         # Create summary
@@ -510,7 +516,7 @@ def main():
             # Count italic characters
             char_predictions = []
             for i, proba in enumerate(char_probas):
-                is_italic = proba[1] >= 0.75
+                is_italic = proba[1] >= 0.65
                 char_predictions.append({
                     'position': i,
                     'is_italic': bool(is_italic),
@@ -540,21 +546,21 @@ def main():
                         word_is_italic = True
                         override_reason = "strong italic evidence"
                 
-                # Case 2: Word-level model has very high confidence for italic (>0.8)
-                elif word_probas[1] > 0.8:
-                    # Trust the word-level model when it's very confident
+                # Case 2: Word-level model has very high confidence but consider character evidence
+                elif word_probas[1] > 0.8 and italic_percentage > 10:
+                    # Trust the word-level model when it's very confident AND at least some characters look italic
                     word_is_italic = True
                     override_reason = "high-confidence word-level prediction"
                 
-                # Case 3: Strong character evidence for regular text (<=40%)
+                # Case 3: Strong character evidence for regular text (<=30%)
                 # Only apply if word-level model is not highly confident about italic
-                elif italic_percentage <= 40 and word_probas[1] <= 0.8:
+                elif italic_percentage <= 30 and word_probas[1] <= 0.8:
                     if word_is_italic:  # Only override if there's a disagreement
                         word_is_italic = False
                         override_reason = "strong regular evidence"
                 
-                # Case 4: Moderate italic evidence (>50% italic) with low word-level confidence
-                elif italic_percentage > 50 and word_probas[1] < 0.5:
+                # Case 4: Moderate italic evidence (>50% italic) with low to medium word-level confidence
+                elif italic_percentage > 50 and word_probas[1] < 0.6:
                     if not word_is_italic:  # Only override if there's a disagreement
                         word_is_italic = True
                         override_reason = "majority of characters italic"

@@ -146,7 +146,7 @@ class CharacterDataPreparation:
                 try:
                     img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
                     if img is not None:
-                        augmented_imgs = self.word_data_prep.augment_image(img)
+                        augmented_imgs = self.word_data_prep.apply_augmentation(img)
                         
                         # Save augmented images
                         for i, aug_img in enumerate(augmented_imgs):
@@ -162,7 +162,7 @@ class CharacterDataPreparation:
                 try:
                     img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
                     if img is not None:
-                        augmented_imgs = self.word_data_prep.augment_image(img)
+                        augmented_imgs = self.word_data_prep.apply_augmentation(img)
                         
                         # Save augmented images
                         for i, aug_img in enumerate(augmented_imgs):
